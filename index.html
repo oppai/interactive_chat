@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" 
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ja" lang="ja">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta http-equiv="Content-Language" content="ja" />
+    <meta http-equiv="Content-Style-Type" content="text/css" />
+    <meta http-equiv="Content-Script-Type" content="text/javascript" />
+    <script src="js/jquery.js"></script>
+    <title>インタラクティブチャット</title>
+    <!--[if IE]><script type="text/javascript" src="excanvas.js"></script><![endif]-->
+  </head>
+  <body>
+  	<script src="./socket.io.js"></script>
+	<script>
+		//クライアントクラス
+		function Avator(ctx){
+			var child = this;
+			this.id = -1;
+			this.name = 'No Name';
+			this.x = 100 + Math.floor(Math.random()*(canvas.width-200));
+			this.y = 100 + Math.floor(Math.random()*(canvas.height-200));
+			this.vx = this.vy = 0.0;
+			this.message_text = '';
+			this.move_count = 0;
+			this.message_count = 0;
+
+			this.hitpoint = this.max_hitpoint = 100;
+
+			this.img_num = Math.floor(Math.random()*15),
+
+			this.setImageNum = function(num){
+				child.img_num = num;
+
+				//画像
+				child.img_name = 'icon/icon' + child.img_num + '.png';
+				child.img = new Image();
+				child.img.src = child.img_name;
+				this.img.onload = function(){
+					child.draw();
+				};
+
+				child.draw = function(){
+					ctx.drawImage(child.img, child.x-40, child.y-40, 80, 80);
+					ctx.font = "21px 'ＭＳ Ｐゴシック'";
+					ctx.fillStyle = 'rgb(0, 0, 0)';
+					ctx.fillText(child.name, child.x-20, child.y+55);
+
+					//HPバー表示
+					ctx.fillStyle = 'rgb(255, 255, 255)';
+					ctx.fillRect(child.x-60, child.y+25, 120, 8);
+					ctx.fillStyle = 'rgb(255, 0, 0)';
+					ctx.fillRect(child.x-60+2, child.y+25+2, 120-4, 8-4);
+					ctx.fillStyle = 'rgb(120, 200, 120)';
+					ctx.fillRect(child.x-60+2, child.y+25+2, 116*(this.hitpoint/this.max_hitpoint), 8-4);
+					//this.max_hitpoint
+				};
+
+				child.drawMessage = function(size){
+					//発言
+					if(child.message_count>0){
+						if(size==null) size = 21;
+						ctx.font = size+"px 'ＭＳ Ｐゴシック'";
+						ctx.fillStyle = 'rgba(0, 0, 0, '+child.message_count/50+')';
+						ctx.fillText(child.message_text, child.x-40, child.y-60);
+						child.message_count--;
+					}
+				};
+			};
+
+			this.setImageNum(this.img_num);
+
+			this.update = function(){
+				//動き更新
+				if(this.move_count>0){
+					this.x += this.vx;
+					this.y += this.vy;
+					this.move_count--;
+				}
+			};
+
+			this.setMove = function(dx,dy){
+				this.vx = (dx-this.x) / 50; // 30*0.5
+				this.vy = (dy-this.y) / 50; // 30*0.5
+				this.move_count = 50;
+			};
+
+			this.sendMessage = function(mes){
+				this.message_text = mes;
+				this.message_count = 300;
+			};
+
+			this.distance = function(avator){
+				return Math.sqrt((this.x - avator.x)*(this.x - avator.x) + (this.y - avator.y)*(this.y - avator.y));
+			};
+
+		}
+
+		$(function(){
+			// canvas要素のノードオブジェクト
+			var canvas = $('#canvas')[0];
+			// canvas要素の存在チェックとCanvas未対応ブラウザの対処
+			if ( ! canvas || ! canvas.getContext ) {
+				alert("canvas非対応ブラウザです");
+			}
+			var ctx = canvas.getContext('2d');
+
+			//他のクライアント
+			var clients = new Array();
+
+			//自機の設定
+			var avator = new Avator(ctx);
+			avator.name = 'You';
+
+			//背景描画
+			function drawBackground() {
+				ctx.fillStyle = 'rgb(230, 230, 230)';
+				ctx.fillRect(0,0,canvas.width,canvas.height);
+			};
+
+			//クライアント描画
+			function drawClients() {
+				for (var key in clients) {
+					var dist = avator.distance(clients[key]);
+
+					clients[key].update();
+					clients[key].draw();
+
+					//距離が近いものを表示する
+					if(dist > 300 && clients[key].message_count>50){
+						clients[key].message_count = 50;
+					}
+
+					clients[key].drawMessage(100*(1.0 - Math.min(dist,400)/400));
+				}
+			}
+
+			function postMessage(){
+				avator.sendMessage($('#message').val());
+				socket.emit('message',{id:avator.id, message_text:$('#message').val()});
+				$('#message').val('');
+			}
+
+			//クリックイベント
+			$('#canvas').click(function(event){
+				avator.setMove(event.offsetX,event.offsetY);
+				socket.emit('move',{id:avator.id, x:event.offsetX,y:event.offsetY});
+			});
+
+			//発言
+			$('#send').click(function(){
+				postMessage();
+			});
+			$('#message').keypress(function (e) {
+				if ((e.which && e.which == 13) || (e.keyCode && e.keyCode == 13)) {
+					postMessage();
+				}
+			});
+
+
+			//-----------------
+			// 初期化
+
+			var socket = io.connect('http://ec2.objc.jp/:8001');
+			socket.on('init', function (data) {
+				avator.id = data.id;
+				socket.emit('init',{
+					id:avator.id,
+					x:avator.x,
+					y:avator.y,
+					img_num:avator.img_num,
+					hitpoint:avator.hitpoint
+				});
+
+				//自機は削除
+				delete data.clients[avator.id];
+
+				//クライアントセット
+				for (var key in data.clients) {
+					clients[key] = new Avator(ctx);
+					clients[key].id = data.clients[key].id;
+					clients[key].name = 'Client#'+clients[key].id;
+					clients[key].x = data.clients[key].x;
+					clients[key].y = data.clients[key].y;
+					clients[key].setImageNum(data.clients[key].img_num);
+					clients[key].hitpoint = data.clients[key].hitpoint;
+				}
+
+				console.log(clients);
+			});
+
+			socket.on('add',function (data) {
+				clients[data.id] = new Avator(ctx);
+				clients[data.id].id = data.id;
+				clients[data.id].name = 'Client#'+data.id;
+				clients[data.id].x = data.x;
+				clients[data.id].y = data.y;
+				clients[data.id].setImageNum(data.img_num);
+			});
+
+			socket.on('remove',function (data) {
+				if(clients[data.id]){
+					delete clients[data.id];
+				}
+			});
+
+			socket.on('move',function (data) {
+				if(clients[data.id]){
+					clients[data.id].setMove(data.x,data.y);
+				}
+			});
+
+			socket.on('message',function (data) {
+				if(clients[data.id]){
+					clients[data.id].sendMessage(data.message_text);
+				}
+			});
+			//-----------------
+
+
+			//-----------------
+			//ゲームメインループ
+
+			drawBackground();
+			var fps = 30; // 秒30フレーム
+			setInterval(function(){
+				//更新
+				avator.update();
+				//描画
+				drawBackground();
+				drawClients();
+				avator.draw();
+				avator.drawMessage();
+			}, 100 / fps);
+			//-----------------
+
+
+			//タイムアウト
+			setInterval(function(){
+				if(avator.id>0){
+					socket.emit('timeout',{id:avator.id});
+				}
+			}, 100);
+		});
+
+	</script>
+
+    <h2>インタラクティブチャット</h2>
+    <canvas id="canvas" width="800" height="500"></canvas>
+    <input id="message" type="text" style="width:700px;"/>
+    <input id="send" type="button" value="Send Message" style="width:100px;"/><br><br>
+    外部設置サイト - <a href="http://ec2.objc.jp/node/chat/" target="_blank">http://ec2.objc.jp/node/chat/</a>
+  </body>
+</html>
